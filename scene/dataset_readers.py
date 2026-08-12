@@ -186,7 +186,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
         frames = contents["frames"]
         for idx, frame in enumerate(frames):
-            cam_name = os.path.join(path, frame["file_path"] + extension)
+            rel_path = frame["file_path"]
+            if not rel_path.endswith(extension):
+                rel_path = rel_path + extension
+            image_path = os.path.normpath(os.path.join(path, rel_path))
 
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
@@ -198,8 +201,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
             T = w2c[:3, 3]
 
-            image_path = os.path.join(path, cam_name)
-            image_name = Path(cam_name).stem
+            image_name = Path(image_path).stem
             image = Image.open(image_path)
 
             im_data = np.array(image.convert("RGBA"))
@@ -214,8 +216,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             FovY = fovy 
             FovX = fovx
 
+            # image_ori keeps the native-resolution frame for SRGS HR evaluation GT
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                            image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
+                            image_ori=image, image_path=image_path, image_name=image_name,
+                            width=image.size[0], height=image.size[1]))
             
     return cam_infos
 

@@ -1,0 +1,15 @@
+# Local / generated datasets
+lr_data_splatformer/
+data/
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Env / IDE
+.env
+.venv/
+.idea/
+.vscode/

@@ -21,7 +21,6 @@ def loadCam(args, id, cam_info, resolution_scale, mode):
 
     if args.resolution in [1, 2, 4, 8]:
         resolution = round(orig_w/(resolution_scale * args.resolution)), round(orig_h/(resolution_scale * args.resolution))
-        resolution_ori = (resolution[0] * 4, resolution[1] * 4)
     else:  # should be a type that converts to float
         if args.resolution == -1:
             if orig_w > 1600:
@@ -38,6 +37,9 @@ def loadCam(args, id, cam_info, resolution_scale, mode):
 
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
+
+    # SRGS always supervises / evaluates at 4x the training (LR) resolution
+    resolution_ori = (resolution[0] * 4, resolution[1] * 4)
 
     resized_image_rgb = PILtoTorch(cam_info.image, resolution)
     resized_image_ori_rgb = PILtoTorch(cam_info.image_ori, resolution_ori)

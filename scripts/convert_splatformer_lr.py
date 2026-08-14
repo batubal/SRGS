@@ -21,7 +21,7 @@ Usage:
       --src lr_data_splatformer \
       --out data/splatformer
 
-  # Patch already-converted scenes (drop overlapping train/test views):
+  # Patch already-converted scenes (disjoint splits + xyz-only splat init):
   python scripts/convert_splatformer_lr.py --fix-existing --out data/splatformer
 """
 
@@ -36,7 +36,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-SH_C0 = 0.28209479177387814
+# fetchPly requires RGB; 128/255 = 0.5 maps to ~0 SH DC in create_from_pcd.
+NEUTRAL_RGB = (128, 128, 128)
 
 
 def discover_scenes(src: Path) -> List[Tuple[str, Path]]:
@@ -125,8 +126,8 @@ _TYPE_TO_STRUCT = {
 }
 
 
-def read_gaussian_ply_xyz_rgb(ply_path: Path) -> Tuple[List[Tuple[float, float, float]], List[Tuple[int, int, int]]]:
-    """Read xyz (+ optional SH DC / RGB) from a 3DGS / Splatfacto PLY."""
+def read_gaussian_ply_xyz(ply_path: Path) -> List[Tuple[float, float, float]]:
+    """Read only xyz from a 3DGS / Splatfacto PLY. Ignores SH, opacity, scale, rotation."""
     with open(ply_path, "rb") as f:
         info, _ = _parse_ply_header(f)
         if info["format"] != "binary_little_endian":
@@ -143,36 +144,23 @@ def read_gaussian_ply_xyz_rgb(ply_path: Path) -> Tuple[List[Tuple[float, float, 
             if required not in idx:
                 raise ValueError(f"PLY missing '{required}': {ply_path}")
 
-        has_sh = all(k in idx for k in ("f_dc_0", "f_dc_1", "f_dc_2"))
-        has_rgb = all(k in idx for k in ("red", "green", "blue"))
-
-        xyz: List[Tuple[float, float, float]] = []
-        rgb: List[Tuple[int, int, int]] = []
         data = f.read(stride * count)
         if len(data) < stride * count:
             raise ValueError(f"Truncated PLY body: {ply_path}")
 
+        xyz: List[Tuple[float, float, float]] = []
         for i in range(count):
             vals = struct.unpack_from(fmt, data, i * stride)
-            x, y, z = float(vals[idx["x"]]), float(vals[idx["y"]]), float(vals[idx["z"]])
-            xyz.append((x, y, z))
-            if has_rgb:
-                r = int(vals[idx["red"]])
-                g = int(vals[idx["green"]])
-                b = int(vals[idx["blue"]])
-            elif has_sh:
-                r = int(max(0.0, min(1.0, float(vals[idx["f_dc_0"]]) * SH_C0 + 0.5)) * 255)
-                g = int(max(0.0, min(1.0, float(vals[idx["f_dc_1"]]) * SH_C0 + 0.5)) * 255)
-                b = int(max(0.0, min(1.0, float(vals[idx["f_dc_2"]]) * SH_C0 + 0.5)) * 255)
-            else:
-                r = g = b = 128
-            rgb.append((r, g, b))
-
-    return xyz, rgb
+            xyz.append((float(vals[idx["x"]]), float(vals[idx["y"]]), float(vals[idx["z"]])))
+        return xyz
 
 
-def write_points3d_ply(out_path: Path, xyz: List[Tuple[float, float, float]], rgb: List[Tuple[int, int, int]]) -> None:
-    """Write a simple point cloud PLY that SRGS `fetchPly` can load."""
+def write_points3d_ply(out_path: Path, xyz: List[Tuple[float, float, float]]) -> None:
+    """Write xyz-only init: positions from splat, neutral RGB, zero normals.
+
+    SRGS create_from_pcd still resets scale / rotation / opacity / SH-rest;
+    skipping splat RGB/SH avoids copying appearance that saw eval views.
+    """
     n = len(xyz)
     header = (
         "ply\n"
@@ -189,11 +177,35 @@ def write_points3d_ply(out_path: Path, xyz: List[Tuple[float, float, float]], rg
         "property uchar blue\n"
         "end_header\n"
     ).encode("ascii")
-
+    r, g, b = NEUTRAL_RGB
     with open(out_path, "wb") as f:
         f.write(header)
-        for (x, y, z), (r, g, b) in zip(xyz, rgb):
+        for x, y, z in xyz:
             f.write(struct.pack("<ffffffBBB", x, y, z, 0.0, 0.0, 0.0, r, g, b))
+
+
+def write_xyz_only_init(splat: Path, points_path: Path) -> int:
+    xyz = read_gaussian_ply_xyz(splat)
+    write_points3d_ply(points_path, xyz)
+    return len(xyz)
+
+
+def resolve_splat_ply(scene_dir: Path) -> Optional[Path]:
+    meta_path = scene_dir / "srgs_scene_meta.json"
+    if not meta_path.is_file():
+        return None
+    meta = json.loads(meta_path.read_text())
+    src = meta.get("init_ply_source")
+    if src and not str(src).startswith("NONE"):
+        path = Path(src)
+        if path.is_file():
+            return path
+    nerf = meta.get("source_nerf_dataset")
+    if nerf:
+        found = find_splat_ply(Path(nerf), scene_dir.name)
+        if found is not None:
+            return found
+    return None
 
 
 def _frame_path_key(file_path: str) -> str:
@@ -359,9 +371,9 @@ def convert_scene(scene_id: str, nerf_dir: Path, out_root: Path, link: bool) -> 
 
     splat = find_splat_ply(nerf_dir, scene_id)
     points_path = out_dir / "points3d.ply"
+    n_init_pts = 0
     if splat is not None:
-        xyz, rgb = read_gaussian_ply_xyz_rgb(splat)
-        write_points3d_ply(points_path, xyz, rgb)
+        n_init_pts = write_xyz_only_init(splat, points_path)
         init_src = str(splat)
     else:
         # Fallback: SRGS will synthesize random points if this is missing; create an empty marker note instead.
@@ -375,6 +387,8 @@ def convert_scene(scene_id: str, nerf_dir: Path, out_root: Path, link: bool) -> 
         "scene_id": scene_id,
         "source_nerf_dataset": str(nerf_dir.resolve()),
         "init_ply_source": init_src,
+        "init_attributes": "xyz_only",
+        "init_points": n_init_pts,
         "white_background": True,
         "disjoint_splits": True,
         "train_frames": n_train,
@@ -387,7 +401,8 @@ def convert_scene(scene_id: str, nerf_dir: Path, out_root: Path, link: bool) -> 
             "note": (
                 "Images are 400x400. Use -r 4 so SRGS trains on 100x100 LR, "
                 "upscales x4 with SwinIR to 400, and evaluates against the native 400 GT. "
-                "Overlapping eval views are stripped from transforms_train.json."
+                "Overlapping eval views are stripped from transforms_train.json. "
+                "points3d.ply keeps splat xyz only; SH/opacity/scale/rotation are not copied."
             ),
         },
     }
@@ -418,7 +433,7 @@ def main() -> None:
     parser.add_argument(
         "--fix-existing",
         action="store_true",
-        help="Only strip overlapping train/test views in --out; do not reconvert from --src",
+        help="Strip overlapping train/test views in --out and rewrite points3d.ply as xyz-only",
     )
     args = parser.parse_args()
 
@@ -434,12 +449,28 @@ def main() -> None:
                 raise SystemExit(f"Scene not found in {out}: {args.scene}")
         if not scenes:
             raise SystemExit(f"No converted scenes found under {out}")
-        print(f"Fixing splits in {len(scenes)} scene(s) under {out.resolve()}")
+        print(f"Fixing splits and xyz-only init in {len(scenes)} scene(s) under {out.resolve()}")
         for scene_dir in scenes:
             n_train, n_test, n_dropped = enforce_disjoint_splits(scene_dir)
+            splat = resolve_splat_ply(scene_dir)
+            if splat is not None:
+                n_pts = write_xyz_only_init(splat, scene_dir / "points3d.ply")
+                init_note = f"xyz_only={n_pts} from {splat}"
+            else:
+                init_note = "points3d unchanged (no splat.ply)"
+            meta_path = scene_dir / "srgs_scene_meta.json"
+            if meta_path.is_file():
+                meta = json.loads(meta_path.read_text())
+                meta["init_attributes"] = "xyz_only"
+                if splat is not None:
+                    meta["init_ply_source"] = str(splat)
+                    meta["init_points"] = n_pts
+                with open(meta_path, "w") as f:
+                    json.dump(meta, f, indent=2)
+                    f.write("\n")
             print(
                 f"  {scene_dir.name}: train={n_train} test={n_test} "
-                f"dropped_overlap={n_dropped}"
+                f"dropped_overlap={n_dropped}; {init_note}"
             )
         print("Done. Retrain from scratch; do not reuse the leaked checkpoints.")
         return

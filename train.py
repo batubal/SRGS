@@ -21,7 +21,7 @@ from utils.general_utils import safe_state
 import uuid
 from models.network_swinir import SwinIR as net
 from tqdm import tqdm
-from utils.image_utils import psnr
+from utils.image_utils import psnr_joint
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 try:
@@ -199,7 +199,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         for config in validation_configs:
             if config['cameras'] and len(config['cameras']) > 0:
                 l1_test = 0.0
-                psnr_test = 0.0
+                pred_images = []
+                gt_images = []
                 for idx, viewpoint in enumerate(config['cameras']):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
@@ -209,8 +210,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image, image_test).mean().double()
-                    psnr_test += psnr(image, image_test).mean().double()
-                psnr_test /= len(config['cameras'])
+                    pred_images.append(image)
+                    gt_images.append(image_test)
+                psnr_test = psnr_joint(torch.stack(pred_images), torch.stack(gt_images))
                 l1_test /= len(config['cameras'])          
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
                 if tb_writer:

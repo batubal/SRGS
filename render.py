@@ -70,5 +70,6 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
+    # get_combined_args drops None CLI values, and training cfg_args has no ply/method.
     render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test,
-                ply_path=args.ply, method=args.method)
+                ply_path=getattr(args, "ply", None), method=getattr(args, "method", None))

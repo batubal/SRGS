@@ -227,12 +227,24 @@ class GaussianModel:
 
         extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
         extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
-        assert len(extra_f_names)==3*(self.max_sh_degree + 1) ** 2 - 3
-        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
-        for idx, attr_name in enumerate(extra_f_names):
-            features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
-        # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
-        features_extra = features_extra.reshape((features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1))
+        n_sh_rest = (self.max_sh_degree + 1) ** 2 - 1
+        features_extra = np.zeros((xyz.shape[0], 3, n_sh_rest))
+        if extra_f_names:
+            if len(extra_f_names) % 3 != 0:
+                raise ValueError(f"Expected f_rest_* count divisible by 3, got {len(extra_f_names)} in {path}")
+            loaded_rest = len(extra_f_names) // 3
+            if loaded_rest > n_sh_rest:
+                raise ValueError(
+                    f"PLY SH rest ({loaded_rest} bands) exceeds max_sh_degree={self.max_sh_degree} in {path}")
+            loaded = np.zeros((xyz.shape[0], len(extra_f_names)))
+            for idx, attr_name in enumerate(extra_f_names):
+                loaded[:, idx] = np.asarray(plydata.elements[0][attr_name])
+            # Reshape (P, F*SH_coeffs) to (P, F, SH_coeffs except DC)
+            features_extra[:, :, :loaded_rest] = loaded.reshape((xyz.shape[0], 3, loaded_rest))
+            active_degree = int(np.sqrt(loaded_rest + 1) - 1)
+        else:
+            # Nerfstudio / SplatFormer splat.ply often exports DC only.
+            active_degree = 0
 
         scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
         scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
@@ -253,7 +265,7 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
-        self.active_sh_degree = self.max_sh_degree
+        self.active_sh_degree = active_degree
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}

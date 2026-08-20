@@ -51,7 +51,13 @@ def evaluate(model_paths):
 
             test_dir = Path(scene_dir) / "test"
 
-            for method in os.listdir(test_dir):
+            for method in sorted(os.listdir(test_dir)):
+                method_dir = test_dir / method
+                gt_dir = method_dir / "gt"
+                renders_dir = method_dir / "renders"
+                if not renders_dir.is_dir() or not gt_dir.is_dir():
+                    continue
+
                 print("Method:", method)
 
                 full_dict[scene_dir][method] = {}
@@ -59,9 +65,6 @@ def evaluate(model_paths):
                 full_dict_polytopeonly[scene_dir][method] = {}
                 per_view_dict_polytopeonly[scene_dir][method] = {}
 
-                method_dir = test_dir / method
-                gt_dir = method_dir/ "gt"
-                renders_dir = method_dir / "renders"
                 renders, gts, image_names = readImages(renders_dir, gt_dir)
 
                 ssims = []
@@ -89,6 +92,16 @@ def evaluate(model_paths):
                 json.dump(full_dict[scene_dir], fp, indent=True)
             with open(scene_dir + "/per_view.json", 'w') as fp:
                 json.dump(per_view_dict[scene_dir], fp, indent=True)
+
+            methods = full_dict[scene_dir]
+            if len(methods) > 1:
+                print("Summary")
+                print("  {:<20} {:>12} {:>12} {:>12}".format("Method", "SSIM", "PSNR", "LPIPS"))
+                for name in sorted(methods):
+                    m = methods[name]
+                    print("  {:<20} {:>12.7f} {:>12.7f} {:>12.7f}".format(
+                        name, m["SSIM"], m["PSNR"], m["LPIPS"]))
+                print("")
         #except:
             #print("Unable to compute metrics for model", scene_dir)
 

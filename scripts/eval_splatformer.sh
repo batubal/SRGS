@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Train + render + metrics for converted SplatFormer scenes.
-# Also renders the precomputed LR splat.ply (no extra training) as baseline_lr.
+# Renders 8 orbit views matching gaussian_sr (256px, fx=500, black background).
+# GT for metrics is the trained SRGS splat at those same cameras (splat-vs-splat),
+# not the dataset photos. Also renders the precomputed LR splat.ply as baseline_lr.
 #
 # Prerequisites:
 #   1) conda env from environment.yml (+ CUDA rasterizer submodules installed)
@@ -102,13 +104,11 @@ while IFS= read -r scene; do
     exit 1
   fi
 
-  if [[ "$SKIP_TRAIN" != "1" ]] || [[ ! -d "$model/test" ]]; then
-    python render.py -m "$model" -r "$RESOLUTION" --skip_train
-  fi
+  python render.py -m "$model" -r "$RESOLUTION" --skip_train --gaussian_sr_cameras
 
   if lr_ply="$(resolve_lr_ply "$src")"; then
     echo "Baseline LR splat: $lr_ply"
-    python render.py -m "$model" -r "$RESOLUTION" --skip_train --ply "$lr_ply" --method baseline_lr
+    python render.py -m "$model" -r "$RESOLUTION" --skip_train --ply "$lr_ply" --method baseline_lr --gaussian_sr_cameras
   else
     echo "No precomputed LR splat.ply for $scene; skipping baseline_lr"
   fi

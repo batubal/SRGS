@@ -22,7 +22,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], ply_path=None):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], ply_path=None, load_cameras=True):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -41,6 +41,22 @@ class Scene:
 
         self.train_cameras = {}
         self.test_cameras = {}
+
+        if not load_cameras:
+            self.cameras_extent = 1.0
+            for resolution_scale in resolution_scales:
+                self.train_cameras[resolution_scale] = []
+                self.test_cameras[resolution_scale] = []
+            if ply_path:
+                self.gaussians.load_ply(ply_path)
+            elif self.loaded_iter:
+                self.gaussians.load_ply(os.path.join(self.model_path,
+                                                               "point_cloud",
+                                                               "iteration_" + str(self.loaded_iter),
+                                                               "point_cloud.ply"))
+            else:
+                raise RuntimeError("load_cameras=False requires --ply or a trained checkpoint")
+            return
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
